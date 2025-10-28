@@ -1,0 +1,69 @@
+
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Amazfit HR</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#ffffff" />
+<style>
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans'; padding: 24px; background:#fafafa; color:#111; display:flex; justify-content:center; }
+.card { background:#fff; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.08); padding:22px; max-width:560px; width:100%; }
+h1 { margin:0 0 8px; font-size:1.6rem; }
+p  { margin:0 0 16px; color:#444; }
+button { font-size:1.05rem; padding:12px 16px; border-radius:12px; border:0; cursor:pointer; }
+button.primary { background:#2563eb; color:#fff; }
+#status { margin-top:14px; color:#111; font-size:0.95rem; min-height:1.4em; }
+.metrics { font-size:1.4rem; margin-top:12px; }
+#log { margin-top:12px; background:#0b1020; color:#a7f3d0; padding:10px; border-radius:10px; font-family:ui-monospace; max-height:200px; overflow:auto; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Amazfit Helio Strap</h1>
+<p>Web Bluetooth • Chrome Android • Leitura única</p>
+<button id="btnOnce" class="primary">🔗 Ler HR e Bateria</button>
+<div class="metrics">❤️ <span id="hr">—</span> bpm &nbsp;|&nbsp; 🔋 <span id="batt">—</span>%</div>
+<div id="status">Pronto.</div>
+<div id="log"></div>
+</div>
+<script>
+const SVC_HR='heart_rate',CH_HR_ME='heart_rate_measurement',SVC_BATT='battery_service',CH_BATT='battery_level';
+let device=null,server=null,hrChar=null,battChar=null;
+const $hr=document.getElementById('hr'),$batt=document.getElementById('batt'),$status=document.getElementById('status'),$log=document.getElementById('log');
+function log(t){console.log(t);$log.textContent+=t+"\n";$log.scrollTop=$log.scrollHeight;}
+function setStatus(t){$status.textContent=t;}
+async function ensureNotifPermission(){if(!('Notification'in window))return false;if(Notification.permission==='granted')return true;if(Notification.permission!=='denied'){const r=await Notification.requestPermission();return r==='granted';}return false;}
+async function notifyLine(hr,batt){
+  const msg=`❤️ ${hr??'—'} bpm | 🔋 ${batt??'—'}%`;
+  try{
+    if('serviceWorker'in navigator&&navigator.serviceWorker.controller){
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(reg&&reg.showNotification){await reg.showNotification(msg,{body:msg,icon:'icon-192.png'});return;}
+    }
+    if('Notification'in window&&Notification.permission==='granted'){new Notification(msg,{body:msg,icon:'icon-192.png'});}else{alert(msg);}
+  }catch(e){console.error('Falha ao mostrar notificação:',e);alert(msg);}
+}
+function parseHeartRate(dv){const f=dv.getUint8(0);return(f&1)?dv.getUint16(1,true):dv.getUint8(1);}
+async function disconnect(){try{if(device?.gatt?.connected)await device.gatt.disconnect();}catch{}device=null;server=null;hrChar=null;battChar=null;log('Desconectado.');}
+async function readOnce(){
+  try{
+    if(!navigator.bluetooth){alert('Este browser não suporta Web Bluetooth.');return;}
+    await ensureNotifPermission();setStatus('A procurar o dispositivo...');$log.textContent='';
+    device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'Amazfit'}],optionalServices:[SVC_HR,SVC_BATT]});
+    device.addEventListener('gattserverdisconnected',()=>log('GATT desconectado.'));
+    log('Selecionado: '+device.name);
+    server=await device.gatt.connect();
+    setStatus('Conectado. A ler dados...');log('GATT conectado.');
+    let hr=null;try{const s=await server.getPrimaryService(SVC_HR);hrChar=await s.getCharacteristic(CH_HR_ME);try{const v=await hrChar.readValue();hr=parseHeartRate(v);log('HR (read): '+hr+' bpm');}catch(e){log('HR read falhou, a tentar notify 1x...');hr=await new Promise(async(res,rej)=>{const h=(ev)=>{const bpm=parseHeartRate(ev.target.value);res(bpm);};let to=setTimeout(()=>{try{hrChar.stopNotifications();}catch{}rej(new Error('Timeout HR notify'));},6000);await hrChar.startNotifications();hrChar.addEventListener('characteristicvaluechanged',(ev)=>{clearTimeout(to);try{hrChar.stopNotifications();}catch{}h(ev);},{once:true});});log('HR (notify): '+hr+' bpm');}}catch(e){log('HR indisponível: '+(e.message||e));}
+    if(hr!==null)$hr.textContent=hr;
+    let batt=null;try{const s=await server.getPrimaryService(SVC_BATT);battChar=await s.getCharacteristic(CH_BATT);const v=await battChar.readValue();batt=v.getUint8(0);log('Bateria: '+batt+'%');}catch(e){log('Bateria indisponível: '+(e.message||e));}
+    if(batt!==null)$batt.textContent=batt;
+    setStatus('Leitura concluída.');notifyLine($hr.textContent,$batt.textContent);
+  }catch(err){setStatus('Erro: '+(err.message||err));log('Erro: '+(err.stack||err));}finally{await disconnect();}
+}
+document.getElementById('btnOnce').addEventListener('click',readOnce);
+if('serviceWorker'in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js').catch(()=>{});});}
+</script>
+</body></html>
